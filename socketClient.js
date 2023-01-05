@@ -3,10 +3,18 @@ const readline = require('readline');
 
 const COMMAND_CHAR = ':';
 
-const appStates = {initialize: 'INITIALIZE', chat: 'CHAT'};
+const appStates = {
+	initialize: 'INITIALIZE',
+	chat: 'CHAT',
+	paused: 'PAUSED',
+	exiting: 'EXITING'
+};
 let appState = appStates.initialize;
+let prevAppState = appState;
+
 let username = null;
 
+let exitTimeout = null;
 let lineReader = null;
 const client = new net.Socket();
 
@@ -26,7 +34,9 @@ client.on('data', async (data) =>
 	}
 	catch (err) {
 		console.log('Sovelluksessa virhe! Vastaanotettu tieto virheellistä.');
-		lineReader.prompt();
+		if (appState !== appStates.paused) {
+			lineReader.prompt(true);
+		}
 		return;	
 	}
 
@@ -44,7 +54,7 @@ client.on('data', async (data) =>
 			handleUsernameRejected(dataObject);
 			break;
 		case 'INFO':
-			console.log(dataObject.data);
+			console.log('\n' + dataObject.data);
 			break;
 		default:
 			console.log('Virheellinen viesti palvelimelta.');
@@ -52,16 +62,29 @@ client.on('data', async (data) =>
 	if (appState == appStates.initialize) {
 		console.log('Syötä käyttäjänimi');
 	}
-	lineReader.prompt();
+	if (appState !== appStates.paused) {
+		lineReader.prompt(true);
+	}
+});
+
+client.on('drain', () => {
+	//lineReader?.resume();
+	if (appState === appStates.paused) {
+		changeAppState(prevAppState);
+	}
 });
 
 client.on('close', (hadError) => 
 {
+	if (appState === appStates.exiting) {
+		clearTimeout(exitTimeout);
+	}
+
 	if (hadError) {
-		console.log('Sovellus suljetaan virheen takia.');
+		console.log('\nSovellus suljetaan virheen takia.');
 	}
 	else {
-		console.log('Sovellus suljetaan.');
+		console.log('\nSovellus suljetaan.');
 	}
 	lineReader?.close();
 });
@@ -71,16 +94,43 @@ client.connect(1337, '127.0.0.1', () => {
 	lineReader = createLineReader(client);
 });
 
+function changeAppState(nextAppState)
+{
+	prevAppState = appState;
+	appState = nextAppState;
+}
+
+function exitApp()
+{
+	changeAppState(appStates.exiting);
+	try {
+		client.end();
+		exitTimeout = setTimeout(() => {
+			client.destroy();
+		}, 3000);
+	}
+	catch (err) {
+		try {
+			console.log('client.destroy()');
+			client.destroy();
+		}
+		catch(err) {
+		}
+	}
+}
+
 function createLineReader(socket)
 {
 	console.log('Komento :EXIT sulkee ohjelman ja :HELP tulostaa ohjeen.');
 	let rl = readline.createInterface(process.stdin, process.stdout);
 	rl.setPrompt(`>`);
-	rl.prompt()
+	rl.prompt(true)
 	
 	rl.on('line', (input) => {
 			processInput(input, socket);
-			lineReader?.prompt();
+			if (appState !== appStates.paused) {
+				lineReader?.prompt(true);
+			}
 		});
 
 	return rl;
@@ -88,30 +138,47 @@ function createLineReader(socket)
 
 function processInput(input, socket)
 {
+	const command = parseCommandFromInput(input);
+	
+	if (command === 'EXIT') {
+		exitApp();
+		return;
+	}
+
 	//When initializing the input is assumed to be username, no command needed
 	if (appState == appStates.initialize) {
 		const dataObject = {type: 'CHANGE_USERNAME', data: input};
 		socket.write(JSON.stringify(dataObject));
+		return;
+	}
+
+	if (appState === appStates.paused) {
+		console.log('Odota hetki...');
+		return;
+	}
+
+	const dataObject = createMessageFromInput(input, command);
+	if (!dataObject) {
+		console.log('Virheellinen komento!');
 	}
 	else {
-		const command = parseCommandFromInput(input);
-		//console.log('command=' + command);
-		if (command === 'EXIT') {
-			if (socket) {
-				socket.end();
-			}
-			else {
-				lineReader?.close();
-			}
-			return;
+		//Pause reading if the write buffer is getting full (highWaterMark).
+		//Reading is resumed, when the socket emits drain event
+		if (!socket.write(JSON.stringify(dataObject))) {
+			//lineReader.pause();
+			changeAppState(appStates.paused);
+			console.log('Odota hetki...');
 		}
-		const dataObject = createMessageFromInput(input, command);
-		if (!dataObject) {
-			console.log('Virheellinen komento!');
-		}
-		else {
-			socket.write(JSON.stringify(dataObject));
-		}
+		//TEST
+		//lineReader.pause();
+		/*changeAppState(appStates.paused);
+		console.log('paused');
+		setTimeout(() => {
+				console.log('resume');
+				//lineReader.resume();
+				changeAppState(prevAppState);
+				lineReader.prompt(true);
+			}, 5000);*/
 	}
 }
 
@@ -184,9 +251,12 @@ function handleMessage(dataObject, private)
 
 function handleUsernameChanged(dataObject)
 {
-	appState = appStates.chat;
+	if (appState === appStates.initialize) {
+		changeAppState(appStates.chat);
+	}
 	username = dataObject.data;
-	console.log('Käyttäjänimesi on ' + username);
+	lineReader.setPrompt(`${username}>`);
+	console.log('\nKäyttäjänimesi on ' + username);
 }
 
 function handleUsernameRejected(dataObject)
