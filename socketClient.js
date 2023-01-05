@@ -2,6 +2,7 @@ const net = require('net');
 const readline = require('readline');
 
 const COMMAND_CHAR = ':';
+const MESSAGE_SEPARATOR = '\n';
 
 const appStates = {
 	initialize: 'INITIALIZE',
@@ -25,40 +26,19 @@ client.on('error', (error) => {
 
 client.on('data', async (data) => 
 {
-	//TODO: Saapuvassa datassa pitäisi olla header, jossa datan pituus
-
-	//It's assumed that arrived data contains the whole json object
-	let dataObject = null;
-	try {
-		dataObject = JSON.parse(data);
-	}
-	catch (err) {
-		console.log('Sovelluksessa virhe! Vastaanotettu tieto virheellistä.');
-		if (appState !== appStates.paused) {
-			lineReader.prompt(true);
+	let i = 0;
+	while (i < data.length) {
+		let separatorIndex = data.indexOf(MESSAGE_SEPARATOR, i);
+		//TODO should save and continue when more data arrives
+		if (separatorIndex == -1) {
+			console.log('Vaillinainen viesti palvelimelta!');
+			return;
 		}
-		return;	
+		let message = data.subarray(i, separatorIndex);
+		processMessage(message);
+		i = separatorIndex + 1;
 	}
-
-	switch (dataObject.type) {
-		case 'MESSAGE':
-			handleMessage(dataObject);
-			break;
-		case 'PRIVATE_MESSAGE':
-			handleMessage(dataObject, true);
-			break;
-		case 'USERNAME_CHANGED':
-			handleUsernameChanged(dataObject);
-			break;
-		case 'USERNAME_REJECTED':
-			handleUsernameRejected(dataObject);
-			break;
-		case 'INFO':
-			console.log('\n' + dataObject.data);
-			break;
-		default:
-			console.log('Virheellinen viesti palvelimelta.');
-	}
+	
 	if (appState == appStates.initialize) {
 		console.log('Syötä käyttäjänimi');
 	}
@@ -93,6 +73,56 @@ client.connect(1337, '127.0.0.1', () => {
 	console.log('Connected');
 	lineReader = createLineReader(client);
 });
+
+function processMessage(data)
+{
+	let dataObject = null;
+	try {
+		dataObject = JSON.parse(data);
+	}
+	catch (err) {
+		console.log('Sovelluksessa virhe! Vastaanotettu tieto virheellistä.');
+		if (appState !== appStates.paused) {
+			lineReader.prompt(true);
+		}
+		return;	
+	}
+
+	switch (dataObject.type) {
+		case 'MESSAGE':
+			handleMessage(dataObject);
+			break;
+		case 'PRIVATE_MESSAGE':
+			handleMessage(dataObject, true);
+			break;
+		case 'USERNAME_CHANGED':
+			handleUsernameChanged(dataObject);
+			break;
+		case 'USERNAME_REJECTED':
+			handleUsernameRejected(dataObject);
+			break;
+		case 'INFO':
+			console.log('\n' + dataObject.data);
+			break;
+		default:
+			console.log('Virheellinen viesti palvelimelta.');
+	}
+}
+
+function writeToSocket(socket, data)
+{
+	try {
+		//Pause app (reading from input) if the write buffer is getting full (highWaterMark).
+		//Reading is resumed, when the socket emits drain event
+		if (!socket.write(data + MESSAGE_SEPARATOR)) {
+			changeAppState(appStates.paused);
+			console.log('Odota hetki...');
+		}
+	}
+	catch (err) {
+		console.log('Error: Failed to write to socket. Message: ' + err.message);
+	}
+}
 
 function changeAppState(nextAppState)
 {
@@ -148,7 +178,7 @@ function processInput(input, socket)
 	//When initializing the input is assumed to be username, no command needed
 	if (appState == appStates.initialize) {
 		const dataObject = {type: 'CHANGE_USERNAME', data: input};
-		socket.write(JSON.stringify(dataObject));
+		writeToSocket(socket, JSON.stringify(dataObject));
 		return;
 	}
 
@@ -162,13 +192,8 @@ function processInput(input, socket)
 		console.log('Virheellinen komento!');
 	}
 	else {
-		//Pause reading if the write buffer is getting full (highWaterMark).
-		//Reading is resumed, when the socket emits drain event
-		if (!socket.write(JSON.stringify(dataObject))) {
-			//lineReader.pause();
-			changeAppState(appStates.paused);
-			console.log('Odota hetki...');
-		}
+		writeToSocket(socket, JSON.stringify(dataObject));
+		
 		//TEST
 		//lineReader.pause();
 		/*changeAppState(appStates.paused);

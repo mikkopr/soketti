@@ -1,60 +1,41 @@
 
 const net = require('net');
 
+const MESSAGE_SEPARATOR = '\n';
+
 const usage = `
 Komennot:
-:EXIT     Exits
-:HELP     Prints help
-:PRIVATE receiver message     Sends the private message to the receiver
+:EXIT     Sulkee ohjelman
+:HELP     Tulostaa ohjeen
+:PRIVATE nimi viesti     Lähettää yksityisviestin
+:ADMIN    Pyytää admin oikeudet (vanhin käyttäjä)
+:KICK nimi     Poistaa käyttäjän    
 `
 
 let users = []; //{socket:, name:, isAdmin:}
 
 let server = net.createServer((socket) => {
 	writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Tervetuloa chattiin!'}));
-	users.push({socket: socket, name: null, isAdmin: false});
 	
+	users.push({socket: socket, name: null, isAdmin: false});
+
 	socket.on('data', (data) => 
 	{	
-		//TODO: Saapuvassa datassa pitäisi olla header, jossa datan pituus
+		//(TODO: Saapuvassa datassa pitäisi olla header, jossa datan pituus)
 		//
 		//Jos palvelin kuormittunut saapuva data saattaa sisältää useita viestejä.
 		//
-
-		//data is Buffer
-		//It's assumed that arrived data contains the whole json object
-		let dataObject = null;
-		try {
-			dataObject = JSON.parse(data);
-		}
-		catch (err) {
-			console.log('Unable to parse incoming JSON!');
-			console.log(data.toString('utf8'));
-			writeToSocket(socket, 'Sovelluksessa virhe!');
-			return;
-		}
-		switch (dataObject.type) {
-			case 'MESSAGE':
-				handleMessage(socket, dataObject, users);
-				break;
-			case 'PRIVATE_MESSAGE':
-				handlePrivateMessage(socket, dataObject, users);
-				break;
-			case 'CHANGE_USERNAME':
-				handleChangeUsername(socket, dataObject, users);
-				break;
-			case 'REQUEST_ADMIN_RIGHTS':
-				handleRequestAdminRights(socket, dataObject, users);
-				break;
-			case 'KICK_USER':
-				handleKickUser(socket, dataObject, users);
-				break;
-			case 'HELP':
-				writeToSocket(socket, JSON.stringify({type: 'INFO', data: usage}));
-				break;
-			default:
-				console.log('Error: Unknown command:' + dataObject.command);
-				writeToSocket(socket, 'Error!');
+		let i = 0;
+		while (i < data.length) {
+			let separatorIndex = data.indexOf(MESSAGE_SEPARATOR, i);
+			//TODO should save and continue when more data arrives
+			if (separatorIndex == -1) {
+				console.log('Inclomplete message');
+				return;
+			}
+			let message = data.subarray(i, separatorIndex);
+			processMessage(socket, message);
+			i = separatorIndex + 1;
 		}
 	});
 	
@@ -73,10 +54,47 @@ let server = net.createServer((socket) => {
 
 server.listen(1337, '127.0.0.1');
 
+function processMessage(socket, data)
+{
+	let dataObject = null;
+	try {
+		dataObject = JSON.parse(data);
+	}
+	catch (err) {
+		console.log('Unable to parse incoming JSON!');
+		console.log(data.toString('utf8'));
+		writeToSocket(socket, 'Sovelluksessa virhe!');
+		return;
+	}
+	switch (dataObject.type) {
+		case 'MESSAGE':
+			handleMessage(socket, dataObject, users);
+			break;
+		case 'PRIVATE_MESSAGE':
+			handlePrivateMessage(socket, dataObject, users);
+			break;
+		case 'CHANGE_USERNAME':
+			handleChangeUsername(socket, dataObject, users);
+			break;
+		case 'REQUEST_ADMIN_RIGHTS':
+			handleRequestAdminRights(socket, dataObject, users);
+			break;
+		case 'KICK_USER':
+			handleKickUser(socket, dataObject, users);
+			break;
+		case 'HELP':
+			writeToSocket(socket, JSON.stringify({type: 'INFO', data: usage}));
+			break;
+		default:
+			console.log('Error: Unknown command:' + dataObject.command);
+			writeToSocket(socket, 'Error!');
+	}
+}
+
 function writeToSocket(socket, data)
 {
 	try {
-		socket.write(data);
+		socket.write(data + MESSAGE_SEPARATOR);
 	}
 	catch (err) {
 		console.log('Error: Failed to write to socket. Message: ' + err.message);
