@@ -1,0 +1,22 @@
+{
+  "name": "chat_app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "socketClient.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mikkopr/soketti.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mikkopr/soketti/issues"
+  },
+  "homepage": "https://github.com/mikkopr/soketti#readme",
+  "dependencies": {
+    "ws": "^8.12.0"
+  }
+}
