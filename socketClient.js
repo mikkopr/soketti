@@ -1,8 +1,11 @@
-const net = require('net');
-const readline = require('readline');
+
+import WebSocket from 'ws';
+//const readline = require('readline');
+import readline from 'readline';
 
 const COMMAND_CHAR = ':';
-const MESSAGE_SEPARATOR = '\n';
+//Interval in milliseconds socket's write buffer is polled for draining
+const DRAIN_POLL_INTERWAL_MS = 100;
 
 const appStates = {
 	initialize: 'INITIALIZE',
@@ -15,29 +18,19 @@ let prevAppState = appState;
 
 let username = null;
 
-let exitTimeout = null;
+let drainPollInterwallId = null;
 let lineReader = null;
-const client = new net.Socket();
 
-client.on('error', (error) => {
-	console.log('Sovelluskessa tapahtui virhe: ', error.message);
-	//close is called immediately
+const webSocket = new WebSocket('ws://127.0.0.1:8080');
+
+webSocket.on('error', (error) => {
+	console.log(`Sovelluskessa tapahtui virhe! koodi: ${error.code}  message: ${error.message}`);
+	lineReader?.close();
 })
 
-client.on('data', async (data) => 
+webSocket.on('message', async (data) => 
 {
-	let i = 0;
-	while (i < data.length) {
-		let separatorIndex = data.indexOf(MESSAGE_SEPARATOR, i);
-		//TODO should save and continue when more data arrives
-		if (separatorIndex == -1) {
-			console.log('Vaillinainen viesti palvelimelta!');
-			return;
-		}
-		let message = data.subarray(i, separatorIndex);
-		processMessage(message);
-		i = separatorIndex + 1;
-	}
+	processMessage(data);
 	
 	if (appState == appStates.initialize) {
 		console.log('Syötä käyttäjänimi');
@@ -47,31 +40,21 @@ client.on('data', async (data) =>
 	}
 });
 
-client.on('drain', () => {
-	//lineReader?.resume();
-	if (appState === appStates.paused) {
-		changeAppState(prevAppState);
-	}
-});
-
-client.on('close', (hadError) => 
+webSocket.on('close', (code, reason) => 
 {
-	if (appState === appStates.exiting) {
-		clearTimeout(exitTimeout);
-	}
-
-	if (hadError) {
-		console.log('\nSovellus suljetaan virheen takia.');
+	if (code === 1000) {
+		console.log('\nSovellus suljetaan.');
 	}
 	else {
-		console.log('\nSovellus suljetaan.');
+		console.log(`\nSovellus suljetaan. koodi: ${code} syy: ${reason}`);
 	}
 	lineReader?.close();
 });
 
-client.connect(1337, '127.0.0.1', () => {
+webSocket.on('open', () => 
+{
 	console.log('Connected');
-	lineReader = createLineReader(client);
+	lineReader = createLineReader(webSocket);
 });
 
 function processMessage(data)
@@ -82,6 +65,7 @@ function processMessage(data)
 	}
 	catch (err) {
 		console.log('Sovelluksessa virhe! Vastaanotettu tieto virheellistä.');
+		console.log('data: ' + data);
 		if (appState !== appStates.paused) {
 			lineReader.prompt(true);
 		}
@@ -105,18 +89,32 @@ function processMessage(data)
 			console.log('\n' + dataObject.data);
 			break;
 		default:
-			console.log('Virheellinen viesti palvelimelta.');
+			console.log('Virheellinen viesti palvelimelta. Viestin tyyppi tuntematon.');
 	}
 }
 
 function writeToSocket(socket, data)
 {
 	try {
-		//Pause app (reading from input) if the write buffer is getting full (highWaterMark).
-		//Reading is resumed, when the socket emits drain event
-		if (!socket.write(data + MESSAGE_SEPARATOR)) {
+		//If the socket's write buffer is empty write immediately, otherwise pause and wait
+		//until the buffer is empty.
+		if (socket.bufferedAmount == 0) {
+			socket.send(data);
+		}
+		else {
 			changeAppState(appStates.paused);
 			console.log('Odota hetki...');
+			drainPollInterwallId = setInterval((data) => {
+				if (socket.bufferedAmount == 0) {
+					if (drainPollInterwallId) {
+						clearInterval(drainPollInterwallId);
+						drainPollInterwallId = null;
+					}
+					//App is paused, resume
+					changeAppState(prevAppState);
+					socket.send(data);
+				}
+			}, DRAIN_POLL_INTERWAL_MS);
 		}
 	}
 	catch (err) {
@@ -133,20 +131,7 @@ function changeAppState(nextAppState)
 function exitApp()
 {
 	changeAppState(appStates.exiting);
-	try {
-		client.end();
-		exitTimeout = setTimeout(() => {
-			client.destroy();
-		}, 3000);
-	}
-	catch (err) {
-		try {
-			console.log('client.destroy()');
-			client.destroy();
-		}
-		catch(err) {
-		}
-	}
+	webSocket.close(1000);
 }
 
 function createLineReader(socket)
@@ -266,10 +251,10 @@ function createMessageFromInput(input, command)
 	}
 }
 
-function handleMessage(dataObject, private)
+function handleMessage(dataObject, isPrivate)
 {
 	if (appState === appStates.chat) {
-		const privateMark = private ? '(private)' : '';
+		const privateMark = isPrivate ? '(private)' : '';
 		console.log('\n' + dataObject.sender + privateMark + `: ` + dataObject.data);
 	}
 }

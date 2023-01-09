@@ -1,7 +1,5 @@
 
-const net = require('net');
-
-const MESSAGE_SEPARATOR = '\n';
+import { WebSocketServer } from 'ws';
 
 const usage = `
 Komennot:
@@ -14,45 +12,30 @@ Komennot:
 
 let users = []; //{socket:, name:, isAdmin:}
 
-let server = net.createServer((socket) => {
+const wsServer = new WebSocketServer({port:8080});
+
+wsServer.on('connection', (socket) =>
+{
 	writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Tervetuloa chattiin!'}));
-	
 	users.push({socket: socket, name: null, isAdmin: false});
 
-	socket.on('data', (data) => 
+	socket.on('message', (data) => 
 	{	
-		//(TODO: Saapuvassa datassa pitäisi olla header, jossa datan pituus)
-		//
-		//Jos palvelin kuormittunut saapuva data saattaa sisältää useita viestejä.
-		//
-		let i = 0;
-		while (i < data.length) {
-			let separatorIndex = data.indexOf(MESSAGE_SEPARATOR, i);
-			//TODO should save and continue when more data arrives
-			if (separatorIndex == -1) {
-				console.log('Inclomplete message');
-				return;
-			}
-			let message = data.subarray(i, separatorIndex);
-			processMessage(socket, message);
-			i = separatorIndex + 1;
-		}
+		processMessage(socket, data);
 	});
 	
 	socket.on('error', (error) => {
-		console.log('Error:', error.message);
+		console.log(`Error! code: ${error.code} message: ${error.message}`);
 	});
 
-	socket.on('close', (hadError) => {
-		console.log('Client connection closed hadError=' + hadError);
+	socket.on('close', (code, reason) => {
+		console.log(`Client connection closed. code: ${code} reason: ${reason}`);
 		let index = users.findIndex(item => item.socket === socket);
 		if (index >= 0) {
 			users = users.slice(0, index).concat(users.slice(index + 1, -1));
 		}
 	});
 });
-
-server.listen(1337, '127.0.0.1');
 
 function processMessage(socket, data)
 {
@@ -63,7 +46,7 @@ function processMessage(socket, data)
 	catch (err) {
 		console.log('Unable to parse incoming JSON!');
 		console.log(data.toString('utf8'));
-		writeToSocket(socket, 'Sovelluksessa virhe!');
+		writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Sovelluksessa virhe!'}));
 		return;
 	}
 	switch (dataObject.type) {
@@ -86,34 +69,18 @@ function processMessage(socket, data)
 			writeToSocket(socket, JSON.stringify({type: 'INFO', data: usage}));
 			break;
 		default:
-			console.log('Error: Unknown command:' + dataObject.command);
-			writeToSocket(socket, 'Error!');
+			console.log('Error: Unknown message type:' + dataObject.type);
+			writeToSocket(socket, JSON.stringify({type: 'INFO', data:'Lähetetyn viestin tyyppi tuntematon'}));
 	}
 }
 
 function writeToSocket(socket, data)
 {
 	try {
-		socket.write(data + MESSAGE_SEPARATOR);
+		socket.send(data);
 	}
 	catch (err) {
 		console.log('Error: Failed to write to socket. Message: ' + err.message);
-	}
-}
-
-function endSocket(socket, data)
-{
-	try {
-		socket.end(data);
-	}
-	catch (err) {
-		console.log('Error: Failed to end a socket. Message: ' + err.message);
-		try {
-			target.socket.destroy();
-		}
-		catch (err) {
-			console.log('Error: Failed to destroy a socket. Message: ' + err.message);
-		}
 	}
 }
 
@@ -175,9 +142,13 @@ function handleKickUser(socket, dataObject, users)
 		const targetIndex = users.findIndex(item => item.name === dataObject.data);
 		if (targetIndex >= 0) {
 			const target = users[targetIndex];
-			endSocket(target.socket, JSON.stringify({type: 'INFO', data: `Sinut on poistettu chatista.`}));
-			users = users.slice(0, targetIndex).concat(users.slice(targetIndex + 1, -1));
-			writeToSocket(socket, JSON.stringify({type: 'INFO', data: `Käyttäjä ${dataObject.data} poistettu.`}));
+			writeToSocket(target.socket, JSON.stringify({type: 'INFO', data: `Sinut on poistettu chatista.`}));
+			//Close the socket on the next round of the event loop, otherwise the previous message isn't sended
+			setTimeout(() => {
+				target.socket?.close(1000);
+				users = users.slice(0, targetIndex).concat(users.slice(targetIndex + 1, -1));
+				writeToSocket(socket, JSON.stringify({type: 'INFO', data: `Käyttäjä ${target.name} poistettu.`}));
+			}, 0);
 		}
 		else {
 			writeToSocket(socket, JSON.stringify({type: 'INFO', data: `Käyttäjää ${dataObject.data} ei löydy`}));
