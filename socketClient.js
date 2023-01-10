@@ -1,11 +1,15 @@
 
 import WebSocket from 'ws';
-//const readline = require('readline');
 import readline from 'readline';
 
+//process.env.NODE_EXTRA_CA_CERTS = './cert.pem';
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0; //Self signed certificate
+
+const SERVER = 'wss://127.0.0.1:8080';
 const COMMAND_CHAR = ':';
 //Interval in milliseconds socket's write buffer is polled for draining
 const DRAIN_POLL_INTERWAL_MS = 100;
+const HANDSHAKE_TIMEOUT_MS = 5000;
 
 const appStates = {
 	initialize: 'INITIALIZE',
@@ -21,7 +25,7 @@ let username = null;
 let drainPollInterwallId = null;
 let lineReader = null;
 
-const webSocket = new WebSocket('ws://127.0.0.1:8080');
+const webSocket = new WebSocket(SERVER, {handshakeTimeout: HANDSHAKE_TIMEOUT_MS, timeout: 5000});
 
 webSocket.on('error', (error) => {
 	console.log(`Sovelluskessa tapahtui virhe! koodi: ${error.code}  message: ${error.message}`);
@@ -46,7 +50,7 @@ webSocket.on('close', (code, reason) =>
 		console.log('\nSovellus suljetaan.');
 	}
 	else {
-		console.log(`\nSovellus suljetaan. koodi: ${code} syy: ${reason}`);
+		console.log(`\nSovellus suljetaan yhteysvirheen takia. koodi: ${code} syy: ${reason}`);
 	}
 	lineReader?.close();
 });
@@ -55,6 +59,10 @@ webSocket.on('open', () =>
 {
 	console.log('Connected');
 	lineReader = createLineReader(webSocket);
+});
+
+webSocket.on('ping', () => {
+	console.log('ping');
 });
 
 function processMessage(data)

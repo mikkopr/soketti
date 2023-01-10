@@ -1,5 +1,14 @@
 
 import { WebSocketServer } from 'ws';
+import * as https from 'https';
+import * as fs from 'fs';
+
+const PORT = 8080;
+const CERT = './cert.pem';
+const KEY = './key.pem';
+
+//How often ping messages sent
+const PING_INTERVAL_MS = 10000;
 
 const usage = `
 Komennot:
@@ -12,10 +21,28 @@ Komennot:
 
 let users = []; //{socket:, name:, isAdmin:}
 
-const wsServer = new WebSocketServer({port:8080});
+const httpServer = https.createServer({
+	cert: fs.readFileSync(CERT),
+	key: fs.readFileSync(KEY)
+});
+
+const wsServer = new WebSocketServer({server: httpServer});
+
+const pingIntervalId = setInterval(() => {
+	users.forEach( (user) => {
+		//If pong response hasn't arrived, terminate
+		if (user.socket.isAlive === false) {
+			user.socket.terminate();
+			return;
+		}
+		user.socket.isAlive = false;
+		user.socket.ping();
+	})
+}, PING_INTERVAL_MS);
 
 wsServer.on('connection', (socket) =>
 {
+	socket.isAlive = true;
 	writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Tervetuloa chattiin!'}));
 	users.push({socket: socket, name: null, isAdmin: false});
 
@@ -24,18 +51,24 @@ wsServer.on('connection', (socket) =>
 		processMessage(socket, data);
 	});
 	
+	socket.on('pong', () => {
+		socket.isAlive = true;
+	});
+
 	socket.on('error', (error) => {
 		console.log(`Error! code: ${error.code} message: ${error.message}`);
+		removeUser(socket);
 	});
 
 	socket.on('close', (code, reason) => {
 		console.log(`Client connection closed. code: ${code} reason: ${reason}`);
-		let index = users.findIndex(item => item.socket === socket);
-		if (index >= 0) {
-			users = users.slice(0, index).concat(users.slice(index + 1, -1));
-		}
+		clearInterval(pingIntervalId);
+		removeUser(socket);
 	});
 });
+
+httpServer.listen(PORT);
+
 
 function processMessage(socket, data)
 {
@@ -71,6 +104,14 @@ function processMessage(socket, data)
 		default:
 			console.log('Error: Unknown message type:' + dataObject.type);
 			writeToSocket(socket, JSON.stringify({type: 'INFO', data:'Lähetetyn viestin tyyppi tuntematon'}));
+	}
+}
+
+function removeUser(socket)
+{
+	let index = users.findIndex(item => item.socket === socket);
+	if (index >= 0) {
+		users = users.slice(0, index).concat(users.slice(index + 1, -1));
 	}
 }
 
