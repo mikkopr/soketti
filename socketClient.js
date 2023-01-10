@@ -61,9 +61,9 @@ webSocket.on('open', () =>
 	lineReader = createLineReader(webSocket);
 });
 
-webSocket.on('ping', () => {
+/*webSocket.on('ping', () => {
 	console.log('ping');
-});
+});*/
 
 function processMessage(data)
 {

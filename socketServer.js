@@ -19,7 +19,7 @@ Komennot:
 :KICK nimi     Poistaa käyttäjän    
 `
 
-let users = []; //{socket:, name:, isAdmin:}
+const users = new Map(); //{socket:, name:, isAdmin:}
 
 const httpServer = https.createServer({
 	cert: fs.readFileSync(CERT),
@@ -29,14 +29,14 @@ const httpServer = https.createServer({
 const wsServer = new WebSocketServer({server: httpServer});
 
 const pingIntervalId = setInterval(() => {
-	users.forEach( (user) => {
+	users.forEach( (value, key) => {
 		//If pong response hasn't arrived, terminate
-		if (user.socket.isAlive === false) {
-			user.socket.terminate();
+		if (value.socket.isAlive === false) {
+			value.socket.terminate();
 			return;
 		}
-		user.socket.isAlive = false;
-		user.socket.ping();
+		value.socket.isAlive = false;
+		value.socket.ping();
 	})
 }, PING_INTERVAL_MS);
 
@@ -44,7 +44,7 @@ wsServer.on('connection', (socket) =>
 {
 	socket.isAlive = true;
 	writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Tervetuloa chattiin!'}));
-	users.push({socket: socket, name: null, isAdmin: false});
+	users.set(socket, {socket: socket, name: null, isAdmin: false});
 
 	socket.on('message', (data) => 
 	{	
@@ -107,14 +107,6 @@ function processMessage(socket, data)
 	}
 }
 
-function removeUser(socket)
-{
-	let index = users.findIndex(item => item.socket === socket);
-	if (index >= 0) {
-		users = users.slice(0, index).concat(users.slice(index + 1, -1));
-	}
-}
-
 function writeToSocket(socket, data)
 {
 	try {
@@ -123,6 +115,21 @@ function writeToSocket(socket, data)
 	catch (err) {
 		console.log('Error: Failed to write to socket. Message: ' + err.message);
 	}
+}
+
+function findUserByName(name)
+{
+	for (const user of users.values()) {
+		if (user.name === name) {
+			return user;
+		}
+	}
+	return null;
+}
+
+function removeUser(socket)
+{
+	users.delete(socket);
 }
 
 function handleMessage(socket, receivedData, users)
@@ -137,7 +144,8 @@ function handleMessage(socket, receivedData, users)
 
 function handlePrivateMessage(socket, receivedData, users)
 {
-	const receiver = users.find(item => item.name === receivedData.receiver);
+	let receiver = findUserByName(receivedData.name);
+	
 	if (!receiver) {
 		const dataObject = {type: 'INFO', data: 'Vastaanottajaa ei löydy!'};
 		writeToSocket(socket, JSON.stringify(dataObject));
@@ -154,40 +162,45 @@ function handleChangeUsername(socket, receivedData, users)
 		writeToSocket(socket, JSON.stringify({type: 'USERNAME_REJECTED', data: 'Käyttäjänimi virheellinen.'}));
 		return;
 	}
-	if (users.find(item => item.name === receivedData.data)) {
+	if (findUserByName(receivedData.data)) {
 		writeToSocket(socket, JSON.stringify({type: 'USERNAME_REJECTED', data: 'Käyttäjänimi on jo käytössä.'}));
 		return;
 	}
-	const user = users.find(item => item.socket === socket);
+	const user = users.get(socket);
 	user.name = receivedData.data;
 	writeToSocket(socket, JSON.stringify({type: 'USERNAME_CHANGED', data: user.name}));
 }
 
 function handleRequestAdminRights(socket, dataObject, users)
 {
-	//The oldest user is allowed to be admin
-	let index = users.findIndex(item => item.socket === socket);
-	if (index === 0) {
-		users[index].isAdmin = true;
-		writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Olet admin'}));
+	//Only one admin allowed, the first admin request accepted
+	let adminExists = false;
+	for (const user of users.values()) {
+		if (user.isAdmin) {
+			adminExists = true;
+			break;
+		}
+	}
+	if (adminExists) {
+		writeToSocket(socket,JSON.stringify({type: 'INFO', data: 'Admin pyyntö hylätty. Admin on jo valittu.'}));
 	}
 	else {
-		writeToSocket(socket,JSON.stringify({type: 'INFO', data: 'Admin pyyntö hylätty.'}));
+		users.get(socket).isAdmin = true;
+		writeToSocket(socket, JSON.stringify({type: 'INFO', data: 'Olet admin'}));
 	}
 }
 
 function handleKickUser(socket, dataObject, users)
 {
-	const kicker = users.find(item => item.socket === socket);
+	const kicker = users.get(socket);
 	if (kicker.isAdmin) {
-		const targetIndex = users.findIndex(item => item.name === dataObject.data);
-		if (targetIndex >= 0) {
-			const target = users[targetIndex];
+		const target = findUserByName(dataObject.data);
+		if (target) {
 			writeToSocket(target.socket, JSON.stringify({type: 'INFO', data: `Sinut on poistettu chatista.`}));
 			//Close the socket on the next round of the event loop, otherwise the previous message isn't sended
 			setTimeout(() => {
 				target.socket?.close(1000);
-				users = users.slice(0, targetIndex).concat(users.slice(targetIndex + 1, -1));
+				users.delete(target.socket);
 				writeToSocket(socket, JSON.stringify({type: 'INFO', data: `Käyttäjä ${target.name} poistettu.`}));
 			}, 0);
 		}
